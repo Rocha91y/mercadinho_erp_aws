@@ -1,0 +1,43 @@
+import pandas as pd
+import unicodedata
+
+def remover_acentos(texto):
+    if pd.isna(texto):
+        return texto
+    return unicodedata.normalize('NFKD', str(texto)).encode('ASCII', 'ignore').decode('ASCII')
+
+# Leitura: encoding e separador do Excel BR
+df = pd.read_csv('../base_csv/original/Cad.Colaboradores.csv',
+                 encoding='latin1', sep=';', dtype=str)
+
+# Cabeçalho sem acento, minúsculo e sem espaços
+df.columns = [remover_acentos(c).strip().lower() for c in df.columns]
+
+# Apaga o id_registro e renomeia registro -> admissao (se existir)
+df = df.drop(columns=['id_registro'], errors='ignore')
+df = df.rename(columns={'registro': 'admissao'})
+
+# Tira espaços sobrando em todos os textos
+df = df.apply(lambda col: col.str.strip())
+
+# Tira acentos (e lixo de codificação) de nome e cargo
+for c in ['nome', 'cargo']:
+    df[c] = df[c].apply(remover_acentos)
+
+# Datas: dd/mm/aaaa -> aaaa-mm-dd
+for c in ['nascimento', 'admissao']:
+    df[c] = pd.to_datetime(df[c], dayfirst=True).dt.strftime('%Y-%m-%d')
+
+# Salva pronto pro Supabase
+df.to_csv('../base_csv/tratado/Cad.Colab_visualizar.csv',
+          index=False, sep=';', encoding='utf-8-sig')
+
+# Conferências antes de importar
+print(df.columns.tolist())
+print(df.isna().sum().sum(), "vazios")
+print(df['id_funcionario'].duplicated().sum(), "id repetido")
+print(df['cpf'].duplicated().sum(), "cpf repetido")
+print(df['rg'].duplicated().sum(), "rg repetido")
+print(df['cpf'].str.match(r'^\d{3}\.\d{3}\.\d{3}-\d{2}$').all(), "cpf no formato")
+print(df['rg'].str.match(r'^\d{2}\.\d{3}\.\d{3}-\d{2}$').all(), "rg no formato")
+print(df[df['id_funcionario'] == 'CO00007'])
