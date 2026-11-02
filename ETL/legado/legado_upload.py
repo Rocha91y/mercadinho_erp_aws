@@ -7,7 +7,7 @@ from botocore.exceptions import ClientError
 # =========================
 BUCKET_NAME = "projeto-mercadinho-erp"
 S3_PREFIX = "legado"
-FILE_NAME = "Base_de_dados_mercadinho-Corrigida.xlsx"
+FILE_NAME = "1base_de_dados_mercadinho-Corrigida.xlsx"
 
 # O arquivo está na raiz do repositório clonado pelo GitHub Actions
 LOCAL_FILE_PATH = FILE_NAME
