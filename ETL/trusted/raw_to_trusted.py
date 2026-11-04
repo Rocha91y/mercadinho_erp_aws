@@ -56,8 +56,15 @@ def processar_camada_trusted():
         print(f"[PROCESSING] A processar a aba: '{sheet_name}'")
         
         df = pd.read_excel(xls, sheet_name=sheet_name)
+        
+        # Remove linhas e colunas totalmente vazias
         df = df.dropna(how='all').dropna(axis=1, how='all')
+        
+        # Limpa os nomes das colunas
         df.columns = [limpar_nome_coluna(col) for col in df.columns]
+        
+        # Remove colunas 'unnamed' (lixo de formatação do Excel que quebra o Parquet)
+        df = df.loc[:, ~df.columns.str.startswith('unnamed')]
 
         sheet_upper = sheet_name.upper()
         if sheet_upper in DIMENSOES:
