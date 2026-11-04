@@ -37,7 +37,7 @@ FATOS = [
 def limpar_nome_coluna(coluna):
     coluna_str = str(coluna).strip().lower()
     coluna_sem_acento = unidecode(coluna_str)
-    coluna_limpa = coluna_sem_acento.replace(" ", "_").replace("-", "_").replace(".", "")
+    coluna_limpa = coluna_sem_acento.replace(" ", "_").replace("-", "_").replace(".", "").replace("(", "").replace(")", "")
     return coluna_limpa
 
 def processar_camada_trusted():
@@ -63,8 +63,12 @@ def processar_camada_trusted():
         # Limpa os nomes das colunas
         df.columns = [limpar_nome_coluna(col) for col in df.columns]
         
-        # Remove colunas 'unnamed' (lixo de formatação do Excel que quebra o Parquet)
+        # Remove colunas 'unnamed'
         df = df.loc[:, ~df.columns.str.startswith('unnamed')]
+        
+        # Converte todas as colunas para string/object de forma segura para evitar conflitos de tipos no Parquet
+        for col in df.columns:
+            df[col] = df[col].astype(str)
 
         sheet_upper = sheet_name.upper()
         if sheet_upper in DIMENSOES:
