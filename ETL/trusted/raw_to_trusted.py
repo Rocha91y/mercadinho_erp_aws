@@ -19,8 +19,7 @@ DIMENSOES = [
     'FORNECEDOR',
     'CLIENTES CONTA',
     'CADASTRO COLABORADORES',
-    'TABELA ENCARGOS',
-    'FORMULAS'
+    'TABELA ENCARGOS'
 ]
 
 FATOS = [
@@ -33,8 +32,10 @@ FATOS = [
     'VALORES'
 ]
 
+IGNORAR = ['FORMULAS']  # guias que não são tabelas de dados
+
 # =========================
-# FUNÇÕES DE LIMPEZA E UPLOAD
+# FUNÇÕES
 # =========================
 def limpar_nome_coluna(coluna):
     coluna_str = str(coluna).strip().lower()
@@ -51,6 +52,27 @@ def limpar_nome_coluna(coluna):
     return coluna_limpa
 
 
+def achar_linha_cabecalho(df_bruto, max_linhas=15):
+    # O cabeçalho é a primeira linha bem preenchida (60% do máximo)
+    contagem = df_bruto.head(max_linhas).notna().sum(axis=1)
+    limite = contagem.max() * 0.6
+    return int(contagem[contagem >= limite].index[0])
+
+
+def nomes_unicos(nomes):
+    # Evita colunas repetidas, que o Parquet não aceita
+    vistos = {}
+    resultado = []
+    for n in nomes:
+        if n in vistos:
+            vistos[n] += 1
+            resultado.append(f"{n}_{vistos[n]}")
+        else:
+            vistos[n] = 0
+            resultado.append(n)
+    return resultado
+
+
 def processar_camada_trusted():
     print("[INFO] A iniciar o processamento da camada Trusted...")
 
@@ -63,24 +85,38 @@ def processar_camada_trusted():
     s3_client = boto3.client('s3')
 
     for sheet_name in xls.sheet_names:
+        sheet_upper = sheet_name.upper()
+
+        if sheet_upper in IGNORAR:
+            print(f"[SKIP] Aba ignorada: '{sheet_name}'")
+            continue
+
         print(f"[PROCESSING] A processar a aba: '{sheet_name}'")
 
-        df = pd.read_excel(xls, sheet_name=sheet_name)
+        # Lê sem cabeçalho e descobre em que linha ele está
+        bruto = pd.read_excel(xls, sheet_name=sheet_name, header=None)
+        bruto = bruto.dropna(how='all').dropna(axis=1, how='all')
+        bruto = bruto.reset_index(drop=True)
 
-        # Remove linhas e colunas totalmente vazias
-        df = df.dropna(how='all').dropna(axis=1, how='all')
+        linha = achar_linha_cabecalho(bruto)
+        print(f"         Cabeçalho encontrado na linha {linha}")
+
+        df = bruto.iloc[linha + 1:].copy()
+        df.columns = bruto.iloc[linha]
+
+        # Remove colunas sem nome no cabeçalho
+        df = df.loc[:, df.columns.notna()]
 
         # Limpa os nomes das colunas
-        df.columns = [limpar_nome_coluna(col) for col in df.columns]
+        df.columns = nomes_unicos([limpar_nome_coluna(col) for col in df.columns])
 
-        # Remove colunas 'unnamed'
-        df = df.loc[:, ~df.columns.str.startswith('unnamed')]
+        # Remove linhas totalmente vazias
+        df = df.dropna(how='all')
 
         # Converte para string de forma segura
         for col in df.columns:
             df[col] = df[col].astype(str)
 
-        sheet_upper = sheet_name.upper()
         if sheet_upper in DIMENSOES:
             tipo = "dimensoes"
             prefixo_nome = "dim_"
@@ -97,11 +133,9 @@ def processar_camada_trusted():
         os.makedirs(local_dir, exist_ok=True)
         local_path = f"{local_dir}/{nome_tabela}.parquet"
 
-        # Grava o Parquet localmente
         df.to_parquet(local_path, index=False, engine='pyarrow')
-        print(f"[SUCCESS] Gerado localmente: {local_path}")
+        print(f"[SUCCESS] Gerado localmente: {local_path} ({len(df)} linhas)")
 
-        # Faz o upload para o S3 na camada Trusted
         s3_key = f"trusted/{tipo}/{nome_tabela}/{nome_tabela}.parquet"
         print(f"[INFO] A enviar para o S3 -> s3://{BUCKET_NAME}/{s3_key}")
         s3_client.upload_file(local_path, BUCKET_NAME, s3_key)

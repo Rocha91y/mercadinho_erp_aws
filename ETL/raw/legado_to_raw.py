@@ -1,148 +1,51 @@
-import os
+from datetime import datetime
 import boto3
-import pandas as pd
-from unidecode import unidecode
+from botocore.exceptions import ClientError
 
-# =========================
-# CONFIGURAÇÕES
-# =========================
-EXCEL_PATH = "1base_mestra/Base_de_dados_mercadinho-Corrigida.xlsx"
-LOCAL_OUTPUT_DIR = "ETL/trusted/parquet_output"
 BUCKET_NAME = "projeto-mercadinho-erp"
 
-# =========================
-# MAPEAMENTO DE GUIAS (DIMENSÕES vs FATOS)
-# =========================
-DIMENSOES = [
-    'PRODUTO',
-    'GRUPO',
-    'FORNECEDOR',
-    'CLIENTES CONTA',
-    'CADASTRO COLABORADORES',
-    'TABELA ENCARGOS'
-]
+LEGADO_PREFIX = "legado"   # conferir com o legado_upload.py
+RAW_PREFIX = "raw"         # conferir
 
-FATOS = [
-    'VENDAS',
-    'ESTOQUE',
-    'MOVIMENTACAO',
-    'HISTÓRICO FINANCEIRO',
-    'FOLHA PAGAMENTO',
-    'GASTOS FIXOS',
-    'VALORES'
-]
-
-IGNORAR = ['FORMULAS']  # guias que não são tabelas de dados
-
-# =========================
-# FUNÇÕES
-# =========================
-def limpar_nome_coluna(coluna):
-    coluna_str = str(coluna).strip().lower()
-    coluna_sem_acento = unidecode(coluna_str)
-    coluna_limpa = (
-        coluna_sem_acento
-        .replace(" ", "_")
-        .replace("-", "_")
-        .replace(".", "")
-        .replace("(", "")
-        .replace(")", "")
-        .replace("/", "_")
-    )
-    return coluna_limpa
+FILE_NAME = "Base_de_dados_mercadinho-Corrigida.xlsx"
 
 
-def achar_linha_cabecalho(df_bruto, max_linhas=15):
-    # O cabeçalho é a primeira linha bem preenchida (60% do máximo)
-    contagem = df_bruto.head(max_linhas).notna().sum(axis=1)
-    limite = contagem.max() * 0.6
-    return int(contagem[contagem >= limite].index[0])
+def get_s3_client():
+    return boto3.client("s3", region_name="us-east-1")
 
 
-def nomes_unicos(nomes):
-    # Evita colunas repetidas, que o Parquet não aceita
-    vistos = {}
-    resultado = []
-    for n in nomes:
-        if n in vistos:
-            vistos[n] += 1
-            resultado.append(f"{n}_{vistos[n]}")
-        else:
-            vistos[n] = 0
-            resultado.append(n)
-    return resultado
+def gerar_timestamp_execucao():
+    return datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
 
-def processar_camada_trusted():
-    print("[INFO] A iniciar o processamento da camada Trusted...")
+def copiar_legado_para_raw(s3_client, bucket, file_name):
+    timestamp = gerar_timestamp_execucao()
 
-    if not os.path.exists(EXCEL_PATH):
-        raise FileNotFoundError(f"O arquivo Excel '{EXCEL_PATH}' não foi encontrado.")
+    origem_key = f"{LEGADO_PREFIX}/{file_name}"
+    destino_key = f"{RAW_PREFIX}/ingest_ts={timestamp}/{file_name}"
 
-    xls = pd.ExcelFile(EXCEL_PATH)
-    print(f"[INFO] Abas encontradas no Excel: {xls.sheet_names}")
+    print("[INFO] Iniciando copia Legado para Raw")
+    print(f"       Origem : s3://{bucket}/{origem_key}")
+    print(f"       Destino: s3://{bucket}/{destino_key}")
 
-    s3_client = boto3.client('s3')
+    try:
+        s3_client.copy_object(
+            Bucket=bucket,
+            CopySource={"Bucket": bucket, "Key": origem_key},
+            Key=destino_key
+        )
+        print("[SUCCESS] Arquivo copiado com sucesso para a camada RAW")
+        print(f"[INFO] Timestamp de ingestão: {timestamp}")
 
-    for sheet_name in xls.sheet_names:
-        sheet_upper = sheet_name.upper()
-
-        if sheet_upper in IGNORAR:
-            print(f"[SKIP] Aba ignorada: '{sheet_name}'")
-            continue
-
-        print(f"[PROCESSING] A processar a aba: '{sheet_name}'")
-
-        # Lê sem cabeçalho e descobre em que linha ele está
-        bruto = pd.read_excel(xls, sheet_name=sheet_name, header=None)
-        bruto = bruto.dropna(how='all').dropna(axis=1, how='all')
-        bruto = bruto.reset_index(drop=True)
-
-        linha = achar_linha_cabecalho(bruto)
-        print(f"         Cabeçalho encontrado na linha {linha}")
-
-        df = bruto.iloc[linha + 1:].copy()
-        df.columns = bruto.iloc[linha]
-
-        # Remove colunas sem nome no cabeçalho
-        df = df.loc[:, df.columns.notna()]
-
-        # Limpa os nomes das colunas
-        df.columns = nomes_unicos([limpar_nome_coluna(col) for col in df.columns])
-
-        # Remove linhas totalmente vazias
-        df = df.dropna(how='all')
-
-        # Converte para string de forma segura
-        for col in df.columns:
-            df[col] = df[col].astype(str)
-
-        if sheet_upper in DIMENSOES:
-            tipo = "dimensoes"
-            prefixo_nome = "dim_"
-        elif sheet_upper in FATOS:
-            tipo = "fatos"
-            prefixo_nome = "fato_"
-        else:
-            tipo = "outros"
-            prefixo_nome = "aux_"
-
-        # Uma pasta por tabela: trusted/<tipo>/<nome_tabela>/<nome_tabela>.parquet
-        nome_tabela = f"{prefixo_nome}{limpar_nome_coluna(sheet_name)}"
-        local_dir = f"{LOCAL_OUTPUT_DIR}/{tipo}/{nome_tabela}"
-        os.makedirs(local_dir, exist_ok=True)
-        local_path = f"{local_dir}/{nome_tabela}.parquet"
-
-        df.to_parquet(local_path, index=False, engine='pyarrow')
-        print(f"[SUCCESS] Gerado localmente: {local_path} ({len(df)} linhas)")
-
-        s3_key = f"trusted/{tipo}/{nome_tabela}/{nome_tabela}.parquet"
-        print(f"[INFO] A enviar para o S3 -> s3://{BUCKET_NAME}/{s3_key}")
-        s3_client.upload_file(local_path, BUCKET_NAME, s3_key)
-        print(f"[SUCCESS] Upload concluído para: {s3_key}")
-
-    print("[SUCCESS] Camada Trusted processada e enviada para o S3 com sucesso!")
+    except ClientError as e:
+        print("[ERROR] Falha ao copiar arquivo da camada Legado para Raw")
+        raise e
 
 
 if __name__ == "__main__":
-    processar_camada_trusted()
+    s3_client = get_s3_client()
+    copiar_legado_para_raw(
+        s3_client=s3_client,
+        bucket=BUCKET_NAME,
+        file_name=FILE_NAME
+    )
