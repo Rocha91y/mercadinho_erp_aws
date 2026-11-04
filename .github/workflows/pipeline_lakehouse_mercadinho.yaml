@@ -33,7 +33,10 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
-      # 5. Executa APENAS o Upload do Legado
-      - name: Executar Upload do Legado
+            # 5. Executa o pipeline
+      - name: Executar Pipeline
         run: |
           python ETL/legado/legado_upload.py
+          python ETL/raw/legado_to_raw.py
+          # python ETL/trusted/raw_to_trusted.py
+          # python ETL/curated/run_ctas_athena.py
