@@ -1,4 +1,5 @@
 import os
+import boto3
 import pandas as pd
 from unidecode import unidecode
 
@@ -6,7 +7,8 @@ from unidecode import unidecode
 # CONFIGURAÇÕES
 # =========================
 EXCEL_PATH = "1base_mestra/Base_de_dados_mercadinho-Corrigida.xlsx"
-OUTPUT_DIR = "ETL/trusted/parquet_output"
+LOCAL_OUTPUT_DIR = "ETL/trusted/parquet_output"
+BUCKET_NAME = "projeto-mercadinho-erp"
 
 # =========================
 # MAPEAMENTO DE GUIAS (DIMENSÕES vs FATOS)
@@ -32,7 +34,7 @@ FATOS = [
 ]
 
 # =========================
-# FUNÇÕES DE LIMPEZA
+# FUNÇÕES DE LIMPEZA E UPLOAD
 # =========================
 def limpar_nome_coluna(coluna):
     coluna_str = str(coluna).strip().lower()
@@ -46,11 +48,13 @@ def processar_camada_trusted():
     if not os.path.exists(EXCEL_PATH):
         raise FileNotFoundError(f"O arquivo Excel '{EXCEL_PATH}' não foi encontrado.")
 
-    os.makedirs(f"{OUTPUT_DIR}/dimensoes", exist_ok=True)
-    os.makedirs(f"{OUTPUT_DIR}/fatos", exist_ok=True)
+    os.makedirs(f"{LOCAL_OUTPUT_DIR}/dimensoes", exist_ok=True)
+    os.makedirs(f"{LOCAL_OUTPUT_DIR}/fatos", exist_ok=True)
 
     xls = pd.ExcelFile(EXCEL_PATH)
     print(f"[INFO] Abas encontradas no Excel: {xls.sheet_names}")
+
+    s3_client = boto3.client('s3')
 
     for sheet_name in xls.sheet_names:
         print(f"[PROCESSING] A processar a aba: '{sheet_name}'")
@@ -66,7 +70,7 @@ def processar_camada_trusted():
         # Remove colunas 'unnamed'
         df = df.loc[:, ~df.columns.str.startswith('unnamed')]
         
-        # Converte todas as colunas para string/object de forma segura para evitar conflitos de tipos no Parquet
+        # Converte para string de forma segura
         for col in df.columns:
             df[col] = df[col].astype(str)
 
@@ -82,12 +86,20 @@ def processar_camada_trusted():
             prefixo_nome = "aux_"
 
         nome_arquivo_limpo = limpar_nome_coluna(sheet_name)
-        output_path = f"{OUTPUT_DIR}/{tipo}/{prefixo_nome}{nome_arquivo_limpo}.parquet"
+        file_name = f"{prefixo_nome}{nome_arquivo_limpo}.parquet"
+        local_path = f"{LOCAL_OUTPUT_DIR}/{tipo}/{file_name}"
 
-        df.to_parquet(output_path, index=False, engine='pyarrow')
-        print(f"[SUCCESS] Guardado com sucesso em: {output_path}")
+        # Grava o Parquet localmente
+        df.to_parquet(local_path, index=False, engine='pyarrow')
+        print(f"[SUCCESS] Gerado localmente: {local_path}")
 
-    print("[SUCCESS] Camada Trusted processada com sucesso!")
+        # Faz o upload para o S3 na camada Trusted
+        s3_key = f"trusted/{tipo}/{file_name}"
+        print(f"[INFO] A enviar para o S3 -> s3://{BUCKET_NAME}/{s3_key}")
+        s3_client.upload_file(local_path, BUCKET_NAME, s3_key)
+        print(f"[SUCCESS] Upload concluído para: {s3_key}")
+
+    print("[SUCCESS] Camada Trusted processada e enviada para o S3 com sucesso!")
 
 if __name__ == "__main__":
     processar_camada_trusted()
