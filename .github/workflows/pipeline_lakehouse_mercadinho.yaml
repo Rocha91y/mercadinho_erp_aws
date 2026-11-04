@@ -25,6 +25,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install boto3 openpyxl pandas unidecode pyarrow
    # coloquei o unicode para ler os ajustes feitos no py da trusted. | E agora o pyarrow para o Parquet
+
           
 
       # 4. Configura as credenciais da AWS para o Boto3 usar na nuvem
