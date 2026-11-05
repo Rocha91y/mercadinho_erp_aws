@@ -1,4 +1,4 @@
-#===== IMPORTAÇÕES versão sei lá qual de tanto que tive que ajustar.
+#===== IMPORTAÇÕES
 import os
 import boto3
 import pandas as pd
@@ -50,8 +50,8 @@ IGNORAR = ['FORMULAS']  # guias que não são tabelas de dados
 
 AJUSTES = {
     "dim_cadastro_colaboradores": {
-        "datas": ["registro"],
-        "excluir": ["2023_de_janeiro_a_fevereiro"], 
+        "datas": ["registro", "nascimento"],
+        "excluir": ["2023_de_janeiro_a_fevereiro"],
     },
     "dim_clientes_conta": {
         "datas": ["registro", "vencimento"],
@@ -68,9 +68,13 @@ AJUSTES = {
         "datas": ["registro"],
     },
     "dim_tabela_encargos": {
-        # Alíquotas e encargos NÃO podem ser arredondados (7,5% != 8%)
+        # Alíquotas NÃO podem ser arredondadas (7,5% != 8%)
         "datas": ["vigencia_a_partir_de"],
-        "auto_numerico": True,
+        "dinheiro": ["faixa_1_limite", "faixa_2_limite", "faixa_3_limite",
+                     "faixa_4___teto_limite",
+                     "deducao_1", "deducao_2", "deducao_3", "deducao_4"],
+        "sem_arredondar": ["aliq_1", "aliq_2", "aliq_3", "aliq_4"],
+        "auto_numerico": True,  # o que sobrar (ex.: coluna #) continua automático
     },
     # fato_estoque: sem ajustes (já estava ok)
     "fato_folha_pagamento": {
