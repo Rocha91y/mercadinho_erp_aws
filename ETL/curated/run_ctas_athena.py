@@ -28,6 +28,15 @@ athena = boto3.client("athena", region_name=REGION)
 s3 = boto3.client("s3", region_name=REGION)
 
 
+#===== FUNÇÃO: MOSTRAR QUAL USUÁRIO AWS A ACTION ESTÁ USANDO
+def mostrar_usuario_aws():
+    # Ajuda a achar erros de permissão (AccessDenied): mostra só o nome do usuário
+    sts = boto3.client("sts", region_name=REGION)
+    identidade = sts.get_caller_identity()
+    nome = identidade["Arn"].split("/")[-1]
+    print(f"[INFO] Usuário AWS em uso: {nome}")
+
+
 #===== FUNÇÃO: RODAR UMA QUERY NO ATHENA E ESPERAR TERMINAR
 def rodar_query(sql, descricao):
     print(f"[INFO] Athena -> {descricao}")
@@ -92,6 +101,9 @@ def limpar_pasta_s3(bucket, prefixo):
 #===== FUNÇÃO PRINCIPAL: RODAR OS CTAS DA CURATED
 def processar_camada_curated():
     print("[INFO] A iniciar o processamento da camada Curated...")
+
+    #===== Mostrar qual usuário AWS está em uso (para diagnosticar permissões)
+    mostrar_usuario_aws()
 
     #===== Achar os .sql (ordem alfabética: ind1, ind2, ind3, ind4)
     arquivos = sorted(glob.glob(os.path.join(SQL_DIR, "*.sql")))
