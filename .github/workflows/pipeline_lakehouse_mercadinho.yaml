@@ -47,4 +47,4 @@ jobs:
           python ETL/legado/legado_upload.py
           python ETL/raw/legado_to_raw.py
           python ETL/trusted/raw_to_trusted.py
-          # python ETL/curated/run_ctas_athena.py
+          python ETL/curated/run_ctas_athena.py
