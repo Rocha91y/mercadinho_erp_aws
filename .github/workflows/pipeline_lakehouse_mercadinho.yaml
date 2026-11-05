@@ -2,7 +2,12 @@ name: Pipeline Lakehouse Mercadinho ERP - Legado
 
 on:
   push:
-    branches: [ main ]  # Dispara automaticamente a cada push na branch principal
+    branches: [ main ]  # Dispara a cada push na branch principal
+    paths-ignore:       # ...exceto quando o commit só mexe nestes caminhos
+      - 'ETL/SQL/**'
+      - 'docs/**'
+      - '**.md'
+  workflow_dispatch:    # Botão "Run workflow" para rodar na mão
 
 jobs:
   run-legado-pipeline:
