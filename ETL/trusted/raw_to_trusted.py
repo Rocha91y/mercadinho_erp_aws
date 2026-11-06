@@ -259,7 +259,6 @@ def processar_camada_trusted():
         df = aplicar_ajustes(df, nome_tabela)
 
         #===== LÓGICA DE PARTICIONAMENTO (ANO / MÊS) =====
-        # Tenta identificar se existe alguma coluna de data configurada para esta tabela
         cfg = AJUSTES.get(nome_tabela, {})
         colunas_datas = cfg.get("datas", [])
         
@@ -270,16 +269,22 @@ def processar_camada_trusted():
                 break
 
         local_dir = f"{LOCAL_OUTPUT_DIR}/{tipo}/{nome_tabela}"
+        
+        # Limpa o diretório local da tabela para evitar resíduos de arquivos antigos (ex: full solto)
+        if os.path.exists(local_dir):
+            for root, dirs, files in os.walk(local_dir, topdown=False):
+                for file in files:
+                    os.remove(os.path.join(root, file))
+                for dir in dirs:
+                    os.rmdir(os.path.join(root, dir))
         os.makedirs(local_dir, exist_ok=True)
 
-        # Se encontrou coluna de data e a tabela tem registros, cria as colunas 'ano' e 'mes' para particionar
+        # Se encontrou coluna de data, particiona estritamente por ano e mês
         if coluna_data_encontrada and not df.empty:
-            # Converte para datetime temporariamente para extrair ano e mês
             dt_temp = pd.to_datetime(df[coluna_data_encontrada], errors='coerce')
             df['ano'] = dt_temp.dt.year.fillna(0).astype(int).astype(str)
             df['mes'] = dt_temp.dt.month.fillna(0).astype(int).astype(str).str.zfill(2)
             
-            # Salva particionado usando pyarrow
             df.to_parquet(
                 local_dir,
                 index=False,
@@ -288,28 +293,35 @@ def processar_camada_trusted():
             )
             print(f"[SUCCESS] Gerado localmente com particionamento (ano/mes) via '{coluna_data_encontrada}': {local_dir}")
         else:
-            # Tabelas sem data (ex: estoque) salvam normalmente sem particionar por data
+            # Tabelas sem data salvam arquivo único na raiz da pasta
             local_path = f"{local_dir}/{nome_tabela}.parquet"
             df.to_parquet(local_path, index=False, engine='pyarrow')
             print(f"[SUCCESS] Gerado localmente (sem data/particionamento): {local_path} ({len(df)} linhas)")
 
-        #===== ENVIAR OS ARQUIVOS DO PARQUET PARA O S3 =====
+        #===== LIMPEZA E UPLOAD PARA O S3 =====
         s3_base_prefix = f"trusted/{tipo}/{nome_tabela}"
-        
-        # Percorre a pasta local para subir recursivamente todos os arquivos (incluindo as subpastas de partições se houverem)
+
+        # 1. Limpa os arquivos antigos no S3 para garantir que não fique nenhum arquivo full solto na raiz
+        print(f"[INFO] A limpar dados antigos no S3 em s3://{BUCKET_NAME}/{s3_base_prefix}/")
+        paginator = s3_client.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=BUCKET_NAME, Prefix=f"{s3_base_prefix}/"):
+            objects = [{"Key": obj["Key"]} for obj in page.get("Contents", [])]
+            if objects:
+                s3_client.delete_objects(Bucket=BUCKET_NAME, Delete={"Objects": objects})
+
+        # 2. Faz o upload da nova estrutura local limpa (seja particionada ou arquivo único)
         for root, dirs, files in os.walk(local_dir):
             for file in files:
                 local_file_path = os.path.join(root, file)
-                # Calcula o caminho relativo para manter a estrutura de pastas do particionamento no S3
                 relative_path = os.path.relpath(local_file_path, local_dir)
                 s3_key = f"{s3_base_prefix}/{relative_path}".replace("\\", "/")
                 
                 print(f"[INFO] A enviar -> s3://{BUCKET_NAME}/{s3_key}")
                 s3_client.upload_file(local_file_path, BUCKET_NAME, s3_key)
 
-        print(f"[SUCCESS] Upload concluído para a tabela: {nome_tabela}")
+        print(f"[SUCCESS] Upload limpo concluído para a tabela: {nome_tabela}")
 
-    print("[SUCCESS] Camada Trusted processada e enviada para o S3 com particionamento aplicado!")
+    print("[SUCCESS] Camada Trusted processada, limpa e enviada para o S3 com sucesso!")
 
 
 #===== EXECUÇÃO
