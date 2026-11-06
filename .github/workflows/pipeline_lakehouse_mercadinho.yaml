@@ -8,6 +8,8 @@ on:
       - 'docs/**'
       - '**.md'
   workflow_dispatch:    # Botão "Run workflow" para rodar na mão
+  schedule:
+    - cron: '0 3 * * *'  # Roda todo dia automaticamente às 03:00 UTC (ajuste o horário se preferir)
 
 jobs:
   run-legado-pipeline:
@@ -24,16 +26,23 @@ jobs:
         with:
           python-version: '3.11'
 
-   # 3. Instala as bibliotecas necessárias
+      # 3. Instala as bibliotecas necessárias
       - name: Instalar Dependências
         run: |
           python -m pip install --upgrade pip
           pip install boto3 openpyxl pandas unidecode pyarrow
-   # coloquei o unicode para ler os ajustes feitos no py da trusted. | E agora o pyarrow para o Parquet
 
-          
+      # 4. CI (Integração Contínua) - Validação prévia de sintaxe do código antes da AWS
+      - name: Validar Sintaxe dos Scripts Python (CI)
+        run: |
+          echo "Verificando se há erros de sintaxe nos scripts de ETL..."
+          python -m py_compile ETL/legado/legado_upload.py
+          python -m py_compile ETL/raw/legado_to_raw.py
+          python -m py_compile ETL/trusted/raw_to_trusted.py
+          python -m py_compile ETL/curated/run_ctas_athena.py
+          echo "Validação de CI concluída com sucesso!"
 
-      # 4. Configura as credenciais da AWS para o Boto3 usar na nuvem
+      # 5. Configura as credenciais da AWS para o Boto3 usar na nuvem
       - name: Configurar Credenciais da AWS
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -41,8 +50,8 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
-            # 5. Executa o pipeline
-      - name: Executar Pipeline
+      # 6. Executa o pipeline de CD (Deploy e Execução)
+      - name: Executar Pipeline (CD)
         run: |
           python ETL/legado/legado_upload.py
           python ETL/raw/legado_to_raw.py
