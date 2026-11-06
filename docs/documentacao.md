@@ -156,7 +156,10 @@ O que o script faz:
 
 5. **Remove colunas indevidas:** `2023_de_janeiro_a_fevereiro` (sobra de cabeçalho no Excel) e `linha_hist_vigente` (o Excel exibia o número 3 como data 03/01/1900).
 6. **Gera avisos no log** (`[AVISO]`) quando um valor não consegue ser convertido, em vez de falhar em silêncio.
-7. **Particiona os fatos por ano e mês** (subpastas por período), para consultas analíticas lerem só o período necessário.
+7. **Particiona por ano e mês** as tabelas que possuem coluna de data
+   (fatos e dimensões), em subpastas `ano=AAAA/mes=MM`, para que as
+   consultas analíticas leiam só o período necessário. Tabelas sem
+   coluna de data, como o `fato_estoque`, são gravadas em um único arquivo.
 8. **Grava em Parquet** (formato colunar e compactado) e envia ao S3.
 
 ### 4.4 Camada Curated
