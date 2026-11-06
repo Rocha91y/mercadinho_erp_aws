@@ -3,10 +3,7 @@ name: Pipeline Lakehouse Mercadinho ERP - Legado
 on:
   push:
     branches: [ main ]  # Dispara a cada push na branch principal
-    paths-ignore:       # ...exceto quando o commit só mexe nestes caminhos
-      - 'ETL/SQL/**'
-      - 'docs/**'
-      - '**.md'
+ 
   workflow_dispatch:    # Botão "Run workflow" para rodar na mão
   schedule:
     - cron: '0 3 * * *'  # Roda todo dia automaticamente às 03:00 UTC (ajuste o horário se preferir)
