@@ -185,7 +185,8 @@ O crawler do Glue lê as pastas da Trusted e registra cada uma como tabela. As t
 O arquivo `.github/workflows/Pipelines_lakehouse_mercadinho.yaml` define a esteira **Pipeline Lakehouse Mercadinho ERP - Legado**.
 
 ### 6.1 Gatilhos
-- **`push` na branch `main`**. Assim, mexer só em documentação ou em SQL não reprocessa os dados.
+- **`push` na branch `main`:** qualquer alteração enviada ao repositório (código, SQL, planilha ou documentação) dispara a esteira.
+- Isso garante que a AWS esteja sempre alinhada com o que está versionado no GitHub.
 - **Agendamento diário** (`cron: 0 3 * * *`).
 - **Execução manual** (`workflow_dispatch`, botão *Run workflow*).
 
