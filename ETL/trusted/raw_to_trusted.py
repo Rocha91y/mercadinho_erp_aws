@@ -6,7 +6,6 @@ from unidecode import unidecode
 
 
 #===== CONFIGURAÇÕES GERAIS
-EXCEL_PATH = "1base_mestra/Base_de_dados_mercadinho-Corrigida.xlsx"
 LOCAL_OUTPUT_DIR = "ETL/trusted/parquet_output"
 BUCKET_NAME = "projeto-mercadinho-erp"
 
@@ -99,6 +98,35 @@ AJUSTES = {
         "inteiros": ["ano"],
     },
 }
+
+
+#===== FUNÇÃO AUXILIAR: BUSCAR E BAIXAR O ARQUIVO MAIS RECENTE DA RAW NO S3
+def baixar_mais_recente_da_raw():
+    s3_client = boto3.client('s3')
+    print(f"[INFO] Buscando a carga mais recente na camada Raw (s3://{BUCKET_NAME}/raw/)...")
+    
+    paginator = s3_client.get_paginator("list_objects_v2")
+    prefixos_pastas = set()
+    
+    for page in paginator.paginate(Bucket=BUCKET_NAME, Prefix="raw/"):
+        for obj in page.get("Contents", []):
+            key = obj["Key"]
+            partes = key.split("/")
+            if len(partes) > 1 and partes[1].startswith("ingest_ts="):
+                prefixos_pastas.add(partes[1])
+                
+    if not prefixos_pastas:
+        raise FileNotFoundError("Nenhuma carga encontrada na camada Raw no S3!")
+        
+    pasta_mais_recente = sorted(list(prefixos_pastas), reverse=True)[0]
+    s3_file_key = f"raw/{pasta_mais_recente}/Base_de_dados_mercadinho-Corrigida.xlsx"
+    local_temp_path = "/tmp/Base_de_dados_mercadinho-Corrigida.xlsx"
+    
+    os.makedirs("/tmp", exist_ok=True)
+    print(f"[INFO] Baixando da Raw mais recente: s3://{BUCKET_NAME}/{s3_file_key}")
+    s3_client.download_file(BUCKET_NAME, s3_file_key, local_temp_path)
+    
+    return local_temp_path
 
 
 #===== FUNÇÃO: LIMPAR NOME DE COLUNA
@@ -212,12 +240,15 @@ def aplicar_ajustes(df, nome_tabela):
 
 #===== FUNÇÃO PRINCIPAL: PROCESSAR A CAMADA TRUSTED
 def processar_camada_trusted():
-    print("[INFO] A iniciar o processamento da camada Trusted com particionamento...")
+    print("[INFO] A iniciar o processamento da camada Trusted com particionamento a partir da Raw...")
 
-    if not os.path.exists(EXCEL_PATH):
-        raise FileNotFoundError(f"O arquivo Excel '{EXCEL_PATH}' não foi encontrado.")
+    try:
+        excel_path_utilizado = baixar_mais_recente_da_raw()
+    except Exception as e:
+        print(f"[ERRO] Falha ao recuperar arquivo da Raw: {e}")
+        raise e
 
-    xls = pd.ExcelFile(EXCEL_PATH)
+    xls = pd.ExcelFile(excel_path_utilizado)
     print(f"[INFO] Abas encontradas no Excel: {xls.sheet_names}")
 
     s3_client = boto3.client('s3')
@@ -270,7 +301,6 @@ def processar_camada_trusted():
 
         local_dir = f"{LOCAL_OUTPUT_DIR}/{tipo}/{nome_tabela}"
         
-        # Limpa o diretório local da tabela para evitar resíduos de arquivos antigos (ex: full solto)
         if os.path.exists(local_dir):
             for root, dirs, files in os.walk(local_dir, topdown=False):
                 for file in files:
@@ -279,7 +309,6 @@ def processar_camada_trusted():
                     os.rmdir(os.path.join(root, dir))
         os.makedirs(local_dir, exist_ok=True)
 
-        # Se encontrou coluna de data, particiona estritamente por ano e mês
         if coluna_data_encontrada and not df.empty:
             dt_temp = pd.to_datetime(df[coluna_data_encontrada], errors='coerce')
             df['ano'] = dt_temp.dt.year.fillna(0).astype(int).astype(str)
@@ -293,7 +322,6 @@ def processar_camada_trusted():
             )
             print(f"[SUCCESS] Gerado localmente com particionamento (ano/mes) via '{coluna_data_encontrada}': {local_dir}")
         else:
-            # Tabelas sem data salvam arquivo único na raiz da pasta
             local_path = f"{local_dir}/{nome_tabela}.parquet"
             df.to_parquet(local_path, index=False, engine='pyarrow')
             print(f"[SUCCESS] Gerado localmente (sem data/particionamento): {local_path} ({len(df)} linhas)")
@@ -301,7 +329,6 @@ def processar_camada_trusted():
         #===== LIMPEZA E UPLOAD PARA O S3 =====
         s3_base_prefix = f"trusted/{tipo}/{nome_tabela}"
 
-        # 1. Limpa os arquivos antigos no S3 para garantir que não fique nenhum arquivo full solto na raiz
         print(f"[INFO] A limpar dados antigos no S3 em s3://{BUCKET_NAME}/{s3_base_prefix}/")
         paginator = s3_client.get_paginator("list_objects_v2")
         for page in paginator.paginate(Bucket=BUCKET_NAME, Prefix=f"{s3_base_prefix}/"):
@@ -309,7 +336,6 @@ def processar_camada_trusted():
             if objects:
                 s3_client.delete_objects(Bucket=BUCKET_NAME, Delete={"Objects": objects})
 
-        # 2. Faz o upload da nova estrutura local limpa (seja particionada ou arquivo único)
         for root, dirs, files in os.walk(local_dir):
             for file in files:
                 local_file_path = os.path.join(root, file)
@@ -321,7 +347,7 @@ def processar_camada_trusted():
 
         print(f"[SUCCESS] Upload limpo concluído para a tabela: {nome_tabela}")
 
-    print("[SUCCESS] Camada Trusted processada, limpa e enviada para o S3 com sucesso!")
+    print("[SUCCESS] Camada Trusted processada, limpa e enviada para o S3 com sucesso a partir da Raw!")
 
 
 #===== EXECUÇÃO
