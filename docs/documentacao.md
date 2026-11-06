@@ -77,7 +77,7 @@ mercadinho_erp_aws/
 │       ├── ind1_pagamento_por_fornecedor.sql
 │       ├── ind2_recebimento_por_estado.sql
 │       ├── ind3_recebimentos_em_dia_por_cidade.sql
-│       └── ind4_pagamentos_em_atraso_por_estado.sql
+│       └── ind4_recebimentos_em_atraso_por_estado.sql
 └── docs/
     └── documentacao_tecnica_lakehouse.md  (este arquivo)
 ```
@@ -133,7 +133,7 @@ s3://projeto-mercadinho-erp/
 
 ### 4.3 Camada Trusted
 - **Script:** `raw_to_trusted.py`
-- **Entrada:** a planilha Excel. Cada guia vira uma tabela.
+- **Entrada:** a cópia mais recente da planilha na camada Raw (`raw/ingest_ts=...`). Cada guia vira uma tabela.
 - **Saída:** arquivos Parquet em `trusted/dimensoes/` e `trusted/fatos/`, **uma pasta por tabela** (exigência do crawler do Glue).
 
 O que o script faz:
@@ -143,7 +143,6 @@ O que o script faz:
 3. **Separa fatos e dimensões:**
    - **Dimensões (6):** produto, grupo, fornecedor, clientes_conta, cadastro_colaboradores, tabela_encargos.
    - **Fatos (7):** vendas, estoque, movimentacao, historico_financeiro, folha_pagamento, gastos_fixos, valores.
-   - A guia `FORMULAS` é só anotação e é ignorada.
 4. **Converte os tipos**, de acordo com uma tabela de ajustes por coluna (`AJUSTES`, no topo do script):
 
    | Tipo | Regra |
@@ -157,7 +156,10 @@ O que o script faz:
 
 5. **Remove colunas indevidas:** `2023_de_janeiro_a_fevereiro` (sobra de cabeçalho no Excel) e `linha_hist_vigente` (o Excel exibia o número 3 como data 03/01/1900).
 6. **Gera avisos no log** (`[AVISO]`) quando um valor não consegue ser convertido, em vez de falhar em silêncio.
-7. **Particiona os fatos por ano e mês** (subpastas por período), para consultas analíticas lerem só o período necessário.
+7. **Particiona por ano e mês** as tabelas que possuem coluna de data
+   (fatos e dimensões), em subpastas `ano=AAAA/mes=MM`, para que as
+   consultas analíticas leiam só o período necessário. Tabelas sem
+   coluna de data, como o `fato_estoque`, são gravadas em um único arquivo.
 8. **Grava em Parquet** (formato colunar e compactado) e envia ao S3.
 
 ### 4.4 Camada Curated
@@ -185,7 +187,9 @@ O crawler do Glue lê as pastas da Trusted e registra cada uma como tabela. As t
 O arquivo `.github/workflows/Pipelines_lakehouse_mercadinho.yaml` define a esteira **Pipeline Lakehouse Mercadinho ERP - Legado**.
 
 ### 6.1 Gatilhos
-- **`push` na branch `main`**, exceto quando o commit altera apenas `ETL/SQL/**`, `docs/**` ou arquivos `.md` (`paths-ignore`). Assim, mexer só em documentação ou em SQL não reprocessa os dados.
+- **`push` na branch `main`:** qualquer alteração enviada ao repositório
+  (código, SQL, planilha ou documentação) dispara a esteira. Isso garante
+  que a AWS esteja sempre alinhada com o que está versionado no GitHub.
 - **Agendamento diário** (`cron: 0 3 * * *`).
 - **Execução manual** (`workflow_dispatch`, botão *Run workflow*).
 
@@ -241,15 +245,13 @@ O enunciado usa uma base com Fornecedor, Localidade, Pagamentos e Recebimentos. 
 | 1 | Total de pagamento por fornecedor | `ind1_pagamento_por_fornecedor` | soma de `custo_total` por fornecedor | 32 fornecedores, igual ao número de fornecedores com compra |
 | 2 | Total de recebimento por estado | `ind2_recebimento_por_estado` | soma de `total_recebido` por UF do fornecedor | 8 estados; soma **102.561** = total da `fato_movimentacao` |
 | 3 | Recebimentos em dia por cidade | `ind3_recebimentos_em_dia_por_cidade` | contagem de compras recebidas até a data prevista, por cidade | 18 cidades; soma **2.535** |
-| 4 | Recebimentos em atraso por estado | `ind4_pagamentos_em_atraso_por_estado` | contagem de compras recebidas após a data prevista, por UF | soma **9.603** |
+| 4 | Recebimentos em atraso por estado | `ind4_recebimentos_em_atraso_por_estado` | contagem de compras recebidas após a data prevista, por UF | soma **9.603** |
 
 **Conferência cruzada:** 2.535 (em dia) + 9.603 (em atraso) = **12.138**, que é o total de compras da `fato_movimentacao`. Todas as compras têm data de recebimento.
 
-### 7.3 Observação sobre o Indicador 4
+### 7.3 Definição do Indicador 4
 
-O enunciado fala em "pagamentos em atraso". A base do mercadinho **não possui data de vencimento nem de pagamento das compras**, então o atraso é medido no **recebimento da mercadoria** (chegada depois da data prevista). O nome do arquivo e da tabela ainda contém "pagamentos", mas o indicador deve ser lido como **recebimentos em atraso**.
-
-**Evolução futura:** um fluxo de pagamento (pedido → faturamento com valor e frete → opção *Pagar*, abatendo de uma tabela de caixa) permitirá medir o atraso de pagamento de verdade.
+O Indicador 4 mede os **recebimentos em atraso**: compras cuja data de recebimento (`recebido_em`) é posterior à data prevista (`previsao_de_entrega`), agrupadas por estado (UF do fornecedor).
 
 ---
 
@@ -265,19 +267,10 @@ O enunciado fala em "pagamentos em atraso". A base do mercadinho **não possui d
 
 ---
 
-## 9. Decisões e lições aprendidas
+## 9. Decisões técnicas
 
 - **Uma pasta por tabela na Trusted:** arquivos soltos fazem o crawler criar colunas de partição indevidas ou uma tabela única vazia.
 - **Maiúsculas e minúsculas importam no GitHub Actions:** o servidor é Linux. `SQL` e `sql` são pastas diferentes, ao contrário do Windows.
 - **O CTAS falha se a pasta de destino já existir:** por isso o script limpa o prefixo antes de recriar.
-- **Permissões IAM levam alguns instantes para valer:** logo após anexar uma política, uma nova execução ainda pode receber `AccessDenied`.
 - **Validar com números:** cada indicador foi conferido contra a soma da tabela de origem, e não apenas contra "a consulta rodou".
 - **Avisos em vez de falhas silenciosas:** valores não convertidos aparecem no log como `[AVISO]`.
-
----
-
-## 10. Limitações e próximos passos
-
-- A camada Trusted ainda lê a planilha do **repositório**, e não a cópia mais recente da camada Raw. O próximo passo é fazê-la ler da Raw no S3.
-- O Indicador 4 usa recebimento em atraso (seção 7.3); o fluxo de pagamento fica como evolução.
-- A carga incremental de vendas em Supabase é uma evolução opcional, fora das quatro camadas.
