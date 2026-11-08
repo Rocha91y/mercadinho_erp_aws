@@ -17,3 +17,6 @@ FROM db_mercadinho_trusted.fato_movimentacao m
 JOIN db_mercadinho_trusted.dim_fornecedor f
   ON m.id_fornecedor = f.id_fornecedor
 GROUP BY f.uf;
+
+--== SELECT TESTADO NO ATHENA ANTES DE CRIAR A CTA NO VSCode.
+--== RESULTADO SATISFATÓRIO! SQL VALIDADO!

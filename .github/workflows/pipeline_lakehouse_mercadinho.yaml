@@ -3,10 +3,23 @@ name: Pipeline Lakehouse Mercadinho ERP - Legado
 on:
   push:
     branches: [ main ]  # Dispara a cada push na branch principal
- 
+
   workflow_dispatch:    # Botão "Run workflow" para rodar na mão
+
+  # Agendamento 3x ao dia. O horário do cron é em UTC (Brasília = UTC-3).
+  # Minutos "quebrados" (47, 23, 41) de propósito: o GitHub atrasa muito as execuções (Meu antigo estava demorando 6 horas)
+  # marcadas na hora cheia (:00), porque todo mundo agenda ali.
   schedule:
-    - cron: '0 3 * * *'  # Roda todo dia automaticamente às 03:00 UTC (ajuste o horário se preferir)
+    - cron: '47 3 * * *'   # 00:47 em Brasília
+    - cron: '23 9 * * *'   # 06:23 em Brasília
+    - cron: '41 21 * * *'  # 18:41 em Brasília
+    - cron: '3 16 * * *'   # TESTE: 13:03 em Brasília - APAGAR ESTA LINHA depois de conferir
+
+# Só uma execução por vez: evita que um push e um agendamento rodem juntos
+# e briguem pelas mesmas pastas do S3 (o CTAS apaga e recria a pasta de destino).
+concurrency:
+  group: pipeline-lakehouse-mercadinho
+  cancel-in-progress: false
 
 jobs:
   run-legado-pipeline:
@@ -37,9 +50,14 @@ jobs:
           python -m py_compile ETL/raw/legado_to_raw.py
           python -m py_compile ETL/trusted/raw_to_trusted.py
           python -m py_compile ETL/curated/run_ctas_athena.py
+          python -m py_compile ETL/ci/validar_sql.py
           echo "Validação de CI concluída com sucesso!"
 
-      # 5. Configura as credenciais da AWS para o Boto3 usar na nuvem
+      # 5. CI (Integração Contínua) - Validação dos arquivos SQL da Curated, também antes da AWS
+      - name: Validar Arquivos SQL da Curated (CI)
+        run: python ETL/ci/validar_sql.py
+
+      # 6. Configura as credenciais da AWS para o Boto3 usar na nuvem
       - name: Configurar Credenciais da AWS
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -47,7 +65,7 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
-      # 6. Executa o pipeline de CD (Deploy e Execução)
+      # 7. Executa o pipeline de CD (Deploy e Execução)
       - name: Executar Pipeline (CD)
         run: |
           python ETL/legado/legado_upload.py

@@ -4,6 +4,8 @@
 **Aluno:** Fernando Rocha
 **Repositório:** `Rocha91y/mercadinho_erp_aws`
 **Bucket S3:** `projeto-mercadinho-erp` (região `us-east-1`)
+**Consumo analítico:** Power BI Desktop, conectado à camada Curated via Amazon Athena (seção 9)
+**Última atualização:** 08/11/2026
 
 ---
 
@@ -11,7 +13,7 @@
 
 Este projeto simula a migração de um sistema financeiro baseado em planilha Excel para um **Lakehouse na AWS**, organizado em quatro camadas (Legado → Raw → Trusted → Curated) e automatizado com **DataOps e CI/CD**.
 
-Em vez da base financeira genérica do enunciado, o projeto usa a **base de um mercadinho de produtos de limpeza** (vendas, compras, estoque, folha de pagamento, gastos fixos etc.), com 13 tabelas. Os quatro indicadores obrigatórios foram **adaptados** a essa base (ver seção 7).
+Em vez da base financeira genérica do enunciado, o projeto usa a **base de um mercadinho de produtos de limpeza** (vendas, compras, estoque, folha de pagamento, gastos fixos etc.), com 13 tabelas. Os quatro indicadores obrigatórios foram **adaptados** a essa base (ver seção 7). Além deles, o projeto entrega **quatro indicadores complementares de vendas** (ind5 a ind8), um dashboard no Power BI e uma validação automática (CI) tanto dos scripts Python quanto dos arquivos SQL.
 
 **Resumo do fluxo:**
 
@@ -20,6 +22,8 @@ PC (edição) → GitHub Desktop → GitHub → GitHub Actions → AWS (S3 + Glu
 ```
 
 Ninguém envia dados para a AWS manualmente. Toda carga acontece por um `push` no GitHub, que dispara a esteira.
+
+Depois da camada Curated, o **Power BI** consome as tabelas prontas por meio do Athena (seção 9).
 
 ---
 
@@ -73,11 +77,16 @@ mercadinho_erp_aws/
 │   ├── raw/      legado_to_raw.py
 │   ├── trusted/  raw_to_trusted.py
 │   ├── curated/  run_ctas_athena.py
+│   ├── ci/       validar_sql.py
 │   └── SQL/curated_ctas/
 │       ├── ind1_pagamento_por_fornecedor.sql
 │       ├── ind2_recebimento_por_estado.sql
 │       ├── ind3_recebimentos_em_dia_por_cidade.sql
-│       └── ind4_recebimentos_em_atraso_por_estado.sql
+│       ├── ind4_recebimentos_em_atraso_por_cidade.sql
+│       ├── ind5_faturamento_por_grupo.sql
+│       ├── ind6_vendas_por_produto.sql
+│       ├── ind7_vendas_por_pagamento.sql
+│       └── ind8_faturamento_por_mes.sql
 └── docs/
     └── documentacao_tecnica_lakehouse.md  (este arquivo)
 ```
@@ -93,7 +102,8 @@ mercadinho_erp_aws/
 | `ETL/raw/` | `legado_to_raw.py` | Copia o arquivo para a camada Raw com um carimbo de data e hora. |
 | `ETL/trusted/` | `raw_to_trusted.py` | Limpa, tipa e converte os dados para Parquet. |
 | `ETL/curated/` | `run_ctas_athena.py` | Lê os arquivos SQL e manda o Athena executá-los. |
-| `ETL/SQL/curated_ctas/` | Um `.sql` por indicador | Mantém a lógica de negócio **versionada** e separada do código Python. Alterar um indicador é alterar um arquivo SQL. |
+| `ETL/ci/` | `validar_sql.py` | CI de SQL: valida os arquivos `.sql` antes de qualquer contato com a AWS (seção 6.5). |
+| `ETL/SQL/curated_ctas/` | Um `.sql` por indicador (ind1 a ind8) | Mantém a lógica de negócio **versionada** e separada do código Python. Alterar um indicador é alterar um arquivo SQL. |
 | `docs/` | Documentação em Markdown | Registra a arquitetura e as decisões. |
 
 > A pasta `ETL/` segue o nome da etapa do processo (Extract, Transform, Load), com uma subpasta por camada. Assim, cada camada tem um único script responsável, o que facilita a manutenção e o diagnóstico de erros.
@@ -174,7 +184,7 @@ O que o script faz:
 | Item | Detalhe |
 |---|---|
 | Banco da Trusted | `db_mercadinho_trusted` (13 tabelas, todas Parquet) |
-| Banco da Curated | `db_mercadinho_curated` (4 tabelas) |
+| Banco da Curated | `db_mercadinho_curated` (8 tabelas: ind1 a ind8) |
 | Crawler | `crawler-mercadinho-trusted`, executado sob demanda, com a função IAM `role-glue-mercadinho` |
 | Athena | consulta os dois bancos; resultados em `athena-query-results/` |
 
@@ -190,8 +200,18 @@ O arquivo `.github/workflows/Pipelines_lakehouse_mercadinho.yaml` define a estei
 - **`push` na branch `main`:** qualquer alteração enviada ao repositório
   (código, SQL, planilha ou documentação) dispara a esteira. Isso garante
   que a AWS esteja sempre alinhada com o que está versionado no GitHub.
-- **Agendamento diário** (`cron: 0 3 * * *`).
+- **Agendamento três vezes ao dia**, em horários fora da hora cheia (o cron do GitHub é em UTC):
+
+  | Cron (UTC) | Horário em Brasília |
+  |---|---|
+  | `47 3 * * *` | 00:47 |
+  | `23 9 * * *` | 06:23 |
+  | `41 21 * * *` | 18:41 |
+
+  Os minutos "quebrados" foram escolhidos de propósito. O GitHub atrasa as execuções agendadas quando há muita fila, principalmente na hora cheia, onde a maioria dos projetos agenda. Com o cron original (`0 3 * * *`), a execução chegou a iniciar mais de 6 horas depois do previsto. Três execuções por dia também exercitam a esteira com frequência, o que comprova que a reexecução é segura.
 - **Execução manual** (`workflow_dispatch`, botão *Run workflow*).
+
+**Fila única (`concurrency`):** só uma execução roda por vez. Se um `push` e um agendamento coincidirem, a segunda espera a primeira terminar, porque o CTAS apaga e recria as pastas de destino na Curated e duas execuções simultâneas disputariam os mesmos arquivos.
 
 ### 6.2 Etapas
 
@@ -200,11 +220,12 @@ O arquivo `.github/workflows/Pipelines_lakehouse_mercadinho.yaml` define a estei
 | 1 | Checkout do repositório | baixa o código para o servidor |
 | 2 | Configurar Python | Python 3.11 |
 | 3 | Instalar dependências | `boto3`, `openpyxl`, `pandas`, `unidecode`, `pyarrow` |
-| 4 | **CI: validação** | compila os scripts Python (`py_compile`) para detectar erro de sintaxe **antes** de tocar na AWS |
-| 5 | Credenciais da AWS | usa as *Secrets* `AWS_ACCESS_KEY_ID` e `AWS_SECRET_ACCESS_KEY` |
-| 6 | **CD: executar o pipeline** | roda os scripts em fila: `legado_upload.py` → `legado_to_raw.py` → `raw_to_trusted.py` → `run_ctas_athena.py` |
+| 4 | **CI: sintaxe do Python** | compila os scripts Python (`py_compile`), incluindo o próprio `validar_sql.py`, para detectar erro de sintaxe **antes** de tocar na AWS |
+| 5 | **CI: validação do SQL** | roda `ETL/ci/validar_sql.py` e confere os arquivos `.sql` da Curated (seção 6.5), também **antes** da AWS |
+| 6 | Credenciais da AWS | usa as *Secrets* `AWS_ACCESS_KEY_ID` e `AWS_SECRET_ACCESS_KEY` |
+| 7 | **CD: executar o pipeline** | roda os scripts em fila: `legado_upload.py` → `legado_to_raw.py` → `raw_to_trusted.py` → `run_ctas_athena.py` |
 
-Se qualquer script falhar, a esteira para e fica vermelha, e o log mostra o motivo.
+Se qualquer etapa falhar, a esteira para e fica vermelha, e o log mostra o motivo. Como os dois passos de CI vêm antes das credenciais da AWS, um erro de código ou de SQL nunca chega a tocar a nuvem.
 
 ### 6.3 Segurança (IAM)
 A esteira usa o usuário `github-actions-mercadinho`, com as políticas:
@@ -220,6 +241,26 @@ Para cada arquivo `.sql` (em ordem alfabética):
 4. Se algo falhar, **encerra com erro**, o que deixa a esteira vermelha.
 
 Isso torna a **reexecução previsível**: rodar a esteira várias vezes produz sempre o mesmo resultado, sem erro de "tabela já existe".
+
+### 6.5 CI de SQL (`ETL/ci/validar_sql.py`)
+
+O script lê todos os `.sql` de `ETL/SQL/curated_ctas/` e não precisa de credenciais nem de rede. Para cada arquivo, confere:
+
+| Regra | Por que existe |
+|---|---|
+| Nome no padrão `indN_descricao` (minúsculas, números e `_`) | O nome do arquivo é a chave de tudo: tabela, pasta no S3 e ordem de execução. |
+| Um único comando, terminado em `;`, com parênteses balanceados | Erro de digitação é pego antes de ir para o Athena. |
+| `CREATE TABLE db_mercadinho_curated.<nome do arquivo>` | Evita tabela com nome diferente do arquivo, que a esteira não saberia apagar na reexecução. |
+| `format = 'PARQUET'` e `external_location = 's3://projeto-mercadinho-erp/curated/<nome do arquivo>/'` | Evita o erro clássico de copiar um SQL e esquecer de trocar a pasta de destino, o que faria um indicador sobrescrever outro. |
+| `) AS SELECT` (ou `AS WITH`) | Garante que é um CTAS completo. |
+| Nenhum `DROP`, `DELETE`, `TRUNCATE`, `INSERT`, `UPDATE`, `ALTER`, `GRANT` ou `MERGE` | O SQL de indicador só cria a tabela. Quem apaga é o `run_ctas_athena.py`, de forma controlada. |
+| Só lê tabelas de `db_mercadinho_trusted`, sempre com o nome do banco | A Curated é construída a partir da Trusted. Tabelas locais (`WITH ... AS`) são permitidas. |
+| Nenhum número `indN` repetido | Dois arquivos com o mesmo número indicam cópia esquecida. |
+| ind1 a ind4 presentes | Os quatro indicadores da pós não podem sumir por acidente. |
+
+Se qualquer regra falhar, o script imprime `[ERRO]` com o motivo e termina com código 1, o que deixa a esteira vermelha antes do CD. Se tudo passar, imprime `Validação de SQL concluída com sucesso`.
+
+O script foi testado com os indicadores reais (ind3 a ind8) e com arquivos propositalmente quebrados: pasta de destino errada, tabela com nome diferente do arquivo, parêntese faltando, tabela sem banco, número repetido, comando `DROP` e indicador obrigatório ausente. Todos os erros foram detectados.
 
 ---
 
@@ -238,20 +279,51 @@ O enunciado usa uma base com Fornecedor, Localidade, Pagamentos e Recebimentos. 
 | "Em dia" | `recebido_em <= previsao_de_entrega` |
 | "Em atraso" | `recebido_em > previsao_de_entrega` |
 
-### 7.2 Os quatro indicadores
+### 7.2 Os quatro indicadores da pós
 
 | # | Indicador | Tabela | Métrica | Validação |
 |---|---|---|---|---|
 | 1 | Total de pagamento por fornecedor | `ind1_pagamento_por_fornecedor` | soma de `custo_total` por fornecedor | 32 fornecedores, igual ao número de fornecedores com compra |
 | 2 | Total de recebimento por estado | `ind2_recebimento_por_estado` | soma de `total_recebido` por UF do fornecedor | 8 estados; soma **102.561** = total da `fato_movimentacao` |
 | 3 | Recebimentos em dia por cidade | `ind3_recebimentos_em_dia_por_cidade` | contagem de compras recebidas até a data prevista, por cidade | 18 cidades; soma **2.535** |
-| 4 | Recebimentos em atraso por estado | `ind4_recebimentos_em_atraso_por_estado` | contagem de compras recebidas após a data prevista, por UF | soma **9.603** |
+| 4 | Recebimentos em atraso por cidade | `ind4_recebimentos_em_atraso_por_cidade` | contagem de compras recebidas após a data prevista, por cidade | soma **9.603** |
 
 **Conferência cruzada:** 2.535 (em dia) + 9.603 (em atraso) = **12.138**, que é o total de compras da `fato_movimentacao`. Todas as compras têm data de recebimento.
 
 ### 7.3 Definição do Indicador 4
 
-O Indicador 4 mede os **recebimentos em atraso**: compras cuja data de recebimento (`recebido_em`) é posterior à data prevista (`previsao_de_entrega`), agrupadas por estado (UF do fornecedor).
+O Indicador 4 mede os **recebimentos em atraso**: compras cuja data de recebimento (`recebido_em`) é posterior à data prevista (`previsao_de_entrega`), agrupadas por **cidade** do fornecedor.
+
+O enunciado fala em *pagamentos* em atraso, mas a base do mercadinho não tem data de pagamento: só a data prevista e a data real de recebimento. Por isso o indicador usa o **recebimento em atraso** como equivalente (seção 7.1).
+
+### 7.4 Por que o Indicador 4 é por cidade
+
+O Indicador 4 é o espelho do Indicador 3 e usa a mesma granularidade (cidade) e o mesmo `JOIN` com `dim_fornecedor`. Assim os dois podem ser comparados cidade a cidade e somados (2.535 + 9.603 = 12.138). Um atraso por estado ao lado de um prazo por cidade misturaria dois níveis geográficos no mesmo visual.
+
+Na primeira versão, o Indicador 4 foi construído por estado. Ao trocar para cidade, a tabela e a pasta da versão antiga (`ind4_recebimentos_em_atraso_por_estado`) precisam ser removidas manualmente do Athena (`DROP TABLE`) e do S3, porque o `run_ctas_athena.py` só limpa o que existe nos `.sql` atuais.
+
+### 7.5 Indicadores complementares de vendas (ind5 a ind8)
+
+Além dos quatro da pós, o projeto entrega quatro indicadores sobre a `fato_vendas`. Todos usam `total_a_pagar` (valor da linha já com desconto) e saem com **2 casas decimais** (`DECIMAL(18,2)`).
+
+| # | Indicador | Tabela | Métricas | Dimensão |
+|---|---|---|---|---|
+| 5 | Faturamento por grupo de produto | `ind5_faturamento_por_grupo` | faturamento, itens vendidos, nº de vendas | grupo (`fato_vendas` → `dim_produto` → `dim_grupo`) |
+| 6 | Vendas e rentabilidade por produto | `ind6_vendas_por_produto` | itens vendidos, faturamento, lucro estimado, margem % | produto (`fato_vendas` → `dim_produto`) |
+| 7 | Vendas por forma de pagamento | `ind7_vendas_por_pagamento` | nº de vendas, faturamento, ticket médio | forma de pagamento |
+| 8 | Faturamento por mês | `ind8_faturamento_por_mes` | faturamento, nº de vendas, itens vendidos | ano e mês |
+
+**Critério de validação (o mesmo para os quatro):**
+- A soma do `faturamento` de cada indicador deve ser igual a `SUM(total_a_pagar)` da `fato_vendas`. Se um `JOIN` perder ou duplicar linhas, a soma diverge e o erro aparece.
+- Os `JOIN` não duplicam registros: a `dim_produto` tem 1.019 linhas para 1.019 produtos distintos, e a `dim_grupo` tem 8 linhas para 8 grupos distintos.
+- O faturamento por ano (`ind8`) pode ser comparado com os totais anuais da base.
+
+**Regras de cálculo:**
+- **Nº de vendas:** `COUNT(DISTINCT id_venda)`, porque o `id_venda` se repete quando a venda tem mais de um item.
+- **Ticket médio (ind7):** faturamento dividido pelo nº de vendas.
+- **Margem % (ind6):** `(preço de venda − custo) ÷ preço de venda`, com o custo e o preço do cadastro atual de produtos.
+- **Lucro estimado (ind6):** faturamento menos `quantidade × custo` do cadastro atual. É uma estimativa, porque usa o custo vigente e não o custo da época de cada venda.
+- **Custo e venda como texto:** na `dim_produto`, as colunas `custo` e `venda` estão como texto na Trusted. O `ind6` converte com `TRY_CAST` (trocando vírgula por ponto), em uma tabela temporária local (`WITH prod AS`).
 
 ---
 
@@ -264,13 +336,103 @@ O Indicador 4 mede os **recebimentos em atraso**: compras cuja data de recebimen
 5. No log do passo *Executar Pipeline*, procurar `[SUCCESS] Camada Curated processada com sucesso!`.
 6. No Athena, consultar as tabelas de `db_mercadinho_curated`.
 7. Na primeira carga, ou quando uma pasta da Trusted for recriada, executar o crawler `crawler-mercadinho-trusted`.
+8. No Power BI Desktop, conectar pelo DSN do Athena (seção 9.1) e importar as tabelas de `db_mercadinho_curated`.
+9. Depois de cada execução da esteira, clicar em **Atualizar** no Power BI para trazer os dados novos.
 
 ---
 
-## 9. Decisões técnicas
+## 9. Camada de consumo: Power BI
+
+O Power BI Desktop consome **somente a camada Curated**, nunca a Trusted nem a Raw. A separação entre transformação (esteira) e consumo (dashboard) fica clara: quem constrói o indicador é o SQL do CTAS, e o Power BI apenas o exibe.
+
+### 9.1 Conexão com o Athena
+
+| Item | Valor |
+|---|---|
+| Driver | Amazon Athena ODBC (64 bits) |
+| DSN (Fontes de Dados ODBC 64 bits) | `Athena-Lake-House-Mercadinho` |
+| Região | `us-east-1` |
+| Catálogo | `AwsDataCatalog` |
+| Workgroup | `primary` |
+| Banco | `db_mercadinho_curated` |
+| Saída das consultas | `s3://projeto-mercadinho-erp/athena-query-results/` |
+| Autenticação | IAM Credentials |
+| Modo no Power BI | Importar |
+
+Pontos de atenção:
+- O usuário IAM usado no DSN precisa consultar o Athena, ler o catálogo do Glue e os dados no S3, e **gravar** em `athena-query-results/`.
+- As chaves de acesso ficam **somente no DSN do computador**: nunca no repositório, na documentação ou em arquivos de texto.
+- O DSN precisa ser criado na versão de **64 bits** do administrador ODBC, a mesma arquitetura do Power BI Desktop.
+
+### 9.2 Tabelas importadas
+
+Todas as 8 tabelas da Curated são importadas para o Power BI.
+
+| Tabela | Nível | Métrica |
+|---|---|---|
+| `ind1_pagamento_por_fornecedor` | fornecedor | total pago |
+| `ind2_recebimento_por_estado` | estado | total recebido (unidades) |
+| `ind3_recebimentos_em_dia_por_cidade` | cidade | recebimentos em dia |
+| `ind4_recebimentos_em_atraso_por_cidade` | cidade | recebimentos em atraso |
+| `ind5_faturamento_por_grupo` | grupo de produto | faturamento |
+| `ind6_vendas_por_produto` | produto | vendas, lucro estimado e margem |
+| `ind7_vendas_por_pagamento` | forma de pagamento | vendas e ticket médio |
+| `ind8_faturamento_por_mes` | ano e mês | faturamento |
+
+### 9.3 Estrutura do dashboard
+
+| Guia | Indicadores | Conteúdo |
+|---|---|---|
+| Investimentos | ind1 | Fornecedor e total pago, do maior para o menor |
+| Fluxo de Recebimento | ind2, ind3 e ind4 | Total recebido por estado e recebimentos no prazo e em atraso por cidade |
+| Vendas | ind5 a ind8 | Faturamento por grupo, produtos de maior volume e rentabilidade, formas de pagamento e evolução mensal |
+
+**Identidade visual:** tela de fundo de 1920x1080 (16:9), azul escuro com moldura dourada e a logo Rocha Analytics no canto superior esquerdo. Textos em branco para contraste.
+
+### 9.4 Atualização dos dados
+
+No modo **Importar**, o Power BI guarda uma cópia dos dados. Depois que a esteira roda (por `push` ou por um dos três agendamentos diários), basta clicar em **Atualizar** para trazer a carga nova. Tabelas novas na Curated só aparecem em **Obter dados → Amazon Athena**: o botão Atualizar renova apenas as tabelas já importadas.
+
+O modo Importar foi escolhido porque o Athena cobra pelos dados lidos e os visuais respondem mais rápido: a consulta acontece uma vez por atualização, e não a cada clique no dashboard.
+
+---
+
+## 10. Decisões técnicas
 
 - **Uma pasta por tabela na Trusted:** arquivos soltos fazem o crawler criar colunas de partição indevidas ou uma tabela única vazia.
 - **Maiúsculas e minúsculas importam no GitHub Actions:** o servidor é Linux. `SQL` e `sql` são pastas diferentes, ao contrário do Windows.
 - **O CTAS falha se a pasta de destino já existir:** por isso o script limpa o prefixo antes de recriar.
-- **Validar com números:** cada indicador foi conferido contra a soma da tabela de origem, e não apenas contra "a consulta rodou".
+- **Validar com números:** cada indicador é conferido contra a soma da tabela de origem, e não apenas contra "a consulta rodou".
 - **Avisos em vez de falhas silenciosas:** valores não convertidos aparecem no log como `[AVISO]`.
+- **O Power BI lê só a Curated:** a lógica dos indicadores fica no SQL versionado, e não em cálculos soltos no dashboard.
+- **Credenciais fora do repositório:** as chaves da esteira ficam nas *Secrets* do GitHub, e as do Power BI ficam apenas no DSN do computador.
+- **Dois níveis de CI antes da AWS:** a sintaxe dos scripts Python e a conformidade dos arquivos SQL são validadas sem credenciais, então um erro de código ou de SQL nunca chega a tocar a nuvem.
+- **Agendamento fora da hora cheia e fila única:** minutos quebrados no cron reduzem o atraso do agendador do GitHub, e o `concurrency` impede duas execuções simultâneas sobre as mesmas pastas do S3.
+- **Valores monetários dos indicadores de vendas com 2 casas:** `CAST(... AS DECIMAL(18,2))` no SQL, porque o `total_a_pagar` vem com mais casas decimais (o desconto gera centavos quebrados).
+- **Mudança de nome de indicador exige limpeza manual:** ao renomear um `.sql`, a tabela e a pasta antigas continuam no Glue e no S3 e precisam ser apagadas (foi o caso do ind4, de estado para cidade).
+
+### 10.1 Limitações conhecidas
+
+- **`custo` e `venda` da `dim_produto` estão como texto na Trusted.** O `ind6` contorna isso com `TRY_CAST` no próprio SQL. A correção definitiva é incluir essas colunas no `AJUSTES` do `raw_to_trusted.py`.
+- **`total_a_pagar` não é arredondado na Trusted.** Os indicadores de vendas arredondam na Curated, e por isso a soma por ano pode diferir de centavos de uma soma feita com cada linha já arredondada.
+- **Lucro estimado do `ind6`** usa o custo do cadastro atual, não o custo vigente na data de cada venda.
+
+---
+
+## 11. Controle de status do projeto
+
+| Entregável | Status |
+|---|---|
+| Estrutura completa do Lakehouse no S3 (Legado, Raw, Trusted, Curated) | Concluído |
+| Pipelines de ingestão e transformação | Concluído |
+| Particionamento na Trusted | Concluído (12 tabelas por ano e mês; 1 sem coluna de data) |
+| Catálogo de dados no Glue | Concluído |
+| Quatro indicadores da pós na Curated (ind1 a ind4) | Concluído |
+| Indicadores complementares de vendas (ind5 a ind8) | Concluído |
+| Scripts SQL de CTAS versionados | Concluído (8 arquivos) |
+| CI de Python (sintaxe dos scripts) | Concluído |
+| CI de SQL (`validar_sql.py`) | Concluído |
+| Esteira CI/CD com agendamento 3x ao dia | Concluído |
+| Conexão do Power BI com a Curated | Concluído |
+| Dashboard no Power BI | Concluído |
+| Documentação técnica | Concluído, atualizada em 08/11/2026 |

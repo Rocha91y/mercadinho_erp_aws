@@ -16,3 +16,6 @@ SELECT
   ROUND(SUM(custo_total), 2) AS total_pagamento
 FROM db_mercadinho_trusted.fato_movimentacao
 GROUP BY id_fornecedor, fornecedor;
+
+--== SELECT TESTADO NO ATHENA ANTES DE CRIAR A CTA NO VSCode.
+--== RESULTADO SATISFATÓRIO! SQL VALIDADO!

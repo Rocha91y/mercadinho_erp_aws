@@ -20,3 +20,6 @@ JOIN db_mercadinho_trusted.dim_fornecedor f
 WHERE m.recebido_em IS NOT NULL
   AND m.recebido_em <= m.previsao_de_entrega
 GROUP BY f.cidade;
+
+--== SELECT TESTADO NO ATHENA ANTES DE CRIAR A CTA NO VSCode.
+--== RESULTADO SATISFATÓRIO! SQL VALIDADO!
