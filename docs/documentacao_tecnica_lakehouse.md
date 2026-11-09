@@ -5,7 +5,7 @@
 **Repositório:** `Rocha91y/mercadinho_erp_aws`
 **Bucket S3:** `projeto-mercadinho-erp` (região `us-east-1`)
 **Consumo analítico:** Power BI Desktop, conectado à camada Curated via Amazon Athena (seção 9)
-**Última atualização:** 08/11/2026
+**Última atualização:** 08/11/2026 (versão final do dashboard)
 
 ---
 
@@ -381,13 +381,28 @@ Todas as 8 tabelas da Curated são importadas para o Power BI.
 
 ### 9.3 Estrutura do dashboard
 
+O dashboard tem três guias:
+
 | Guia | Indicadores | Conteúdo |
 |---|---|---|
-| Investimentos | ind1 | Fornecedor e total pago, do maior para o menor |
-| Fluxo de Recebimento | ind2, ind3 e ind4 | Total recebido por estado e recebimentos no prazo e em atraso por cidade |
-| Vendas | ind5 a ind8 | Faturamento por grupo, produtos de maior volume e rentabilidade, formas de pagamento e evolução mensal |
+| **Controle de custos** | ind1, ind2, ind3 e ind4 | Total pago por fornecedor; unidades recebidas por estado; entregas no prazo e com atraso por cidade, com botões para alternar; proporção entre entregas no prazo e com atraso |
+| **Controle de vendas** | ind5, ind7 e ind8 | Resultados por forma de pagamento (faturamento, quantidade vendida e ticket médio, com botões); análise por grupo de produto (faturamento, itens vendidos e quantidade de vendas, com botões); evolução mensal do faturamento, com filtro por ano |
+| **Desempenho de produtos** | ind6 | Tabela de produtos com vendas, lucro estimado e margem, com busca por produto e código |
 
-**Identidade visual:** tela de fundo de 1920x1080 (16:9), azul escuro com moldura dourada e a logo Rocha Analytics no canto superior esquerdo. Textos em branco para contraste.
+**Identidade visual:** página de 1920x1080 (16:9), azul escuro (`#0B1B34`) com moldura dourada (`#C9A961`) e a logo Rocha Analytics no canto superior esquerdo. Textos em branco para contraste.
+
+### 9.3.1 Modelo do relatório
+
+Além das 8 tabelas importadas da Curated, o relatório usa tabelas de apoio criadas no próprio Power BI. Elas não vêm do Athena e não mudam os dados da Curated:
+
+| Tabela de apoio | Função |
+|---|---|
+| `Medidas auxiliares` | Guarda as medidas DAX do relatório (somas, médias e razões, como itens por venda). |
+| `x1 Formas de Pagamento` | Botões que alternam a métrica do indicador 7. |
+| `x2 Situação` | Botões "No prazo" e "Com atraso", que alternam entre os indicadores 3 e 4 no mesmo gráfico. |
+| `x3 Faturamento por grupos` | Botões que alternam a métrica do indicador 5. |
+
+Os botões são parâmetros de campos ou tabelas soltas ligadas a uma medida, e por isso um mesmo gráfico mostra mais de uma métrica sem duplicar visuais. As porcentagens são exibidas por medidas divididas por 100 com o formato de porcentagem, e o ind5 e o ind6 não são filtrados por ano, porque as tabelas não têm essa coluna.
 
 ### 9.4 Atualização dos dados
 

@@ -10,10 +10,7 @@ on:
   # Minutos "quebrados" (47, 23, 41) de propósito: o GitHub atrasa muito as execuções (Meu antigo estava demorando 6 horas)
   # marcadas na hora cheia (:00), porque todo mundo agenda ali.
   schedule:
-    - cron: '47 3 * * *'   # 00:47 em Brasília
-    - cron: '23 9 * * *'   # 06:23 em Brasília
-    - cron: '41 21 * * *'  # 18:41 em Brasília
-    - cron: '3 16 * * *'   # TESTE: 13:03 em Brasília - APAGAR ESTA LINHA depois de conferir
+   - cron: '33 */3 * * *' # Roda de 3 em 3 horas, no minuto 33 (00:33, 03:33, 06:33, 09:33, 12:33, 15:33, 18:33, 21:33)
 
 # Só uma execução por vez: evita que um push e um agendamento rodem juntos
 # e briguem pelas mesmas pastas do S3 (o CTAS apaga e recria a pasta de destino).
