@@ -5,7 +5,7 @@
 **Repositório:** `Rocha91y/mercadinho_erp_aws`
 **Bucket S3:** `projeto-mercadinho-erp` (região `us-east-1`)
 **Consumo analítico:** Power BI Desktop, conectado à camada Curated via Amazon Athena (seção 9)
-**Última atualização:** 08/11/2026 (versão final do dashboard)
+**Última atualização:** 10/11/2026 (agendamento da esteira movido do cron do GitHub para o Amazon EventBridge; ver `docs/otimizando_automacao.md`)
 
 ---
 
@@ -21,7 +21,7 @@ Em vez da base financeira genérica do enunciado, o projeto usa a **base de um m
 PC (edição) → GitHub Desktop → GitHub → GitHub Actions → AWS (S3 + Glue + Athena)
 ```
 
-Ninguém envia dados para a AWS manualmente. Toda carga acontece por um `push` no GitHub, que dispara a esteira.
+Ninguém envia dados para a AWS manualmente. Toda carga acontece por um `push` no GitHub ou por um disparo agendado do Amazon EventBridge, e ambos acionam a esteira.
 
 Depois da camada Curated, o **Power BI** consome as tabelas prontas por meio do Athena (seção 9).
 
@@ -35,7 +35,7 @@ Depois da camada Curated, o **Power BI** consome as tabelas prontas por meio do 
 |---|---|---|
 | **PC do aluno** | Ambiente de edição | Os arquivos são criados e ajustados (scripts Python, SQL, YAML, planilha). Nada de produção roda aqui. |
 | **GitHub** | Fonte oficial do código | Guarda a versão oficial de tudo e o histórico de mudanças (quem mudou, quando e por quê). |
-| **AWS** | Ambiente de execução e dados | S3 guarda os dados, Glue cataloga, Athena consulta e cria os produtos analíticos. |
+| **AWS** | Ambiente de execução e dados | S3 guarda os dados, Glue cataloga, Athena consulta e cria os produtos analíticos. O EventBridge agenda o disparo da esteira. |
 
 ### 2.2 O clone local
 
@@ -68,7 +68,7 @@ PC ──(commit + push)──► GitHub ──(Actions)──► AWS
 
 ```
 mercadinho_erp_aws/
-├── .github/workflows/Pipelines_lakehouse_mercadinho.yaml
+├── .github/workflows/pipeline_lakehouse_mercadinho.yaml
 ├── .gitignore
 ├── 1base_mestra/
 │   └── Base_de_dados_mercadinho-Corrigida.xlsx
@@ -88,7 +88,8 @@ mercadinho_erp_aws/
 │       ├── ind7_vendas_por_pagamento.sql
 │       └── ind8_faturamento_por_mes.sql
 └── docs/
-    └── documentacao_tecnica_lakehouse.md  (este arquivo)
+    ├── documentacao_tecnica_lakehouse.md  (este arquivo)
+    └── otimizando_automacao.md            (disparo da esteira pelo EventBridge)
 ```
 
 ### 3.1 O que cada pasta guarda e por quê
@@ -194,24 +195,30 @@ O crawler do Glue lê as pastas da Trusted e registra cada uma como tabela. As t
 
 ## 6. Esteira DataOps e CI/CD
 
-O arquivo `.github/workflows/Pipelines_lakehouse_mercadinho.yaml` define a esteira **Pipeline Lakehouse Mercadinho ERP - Legado**.
+O arquivo `.github/workflows/pipeline_lakehouse_mercadinho.yaml` define a esteira **Pipeline Lakehouse Mercadinho ERP - Legado**.
 
 ### 6.1 Gatilhos
 - **`push` na branch `main`:** qualquer alteração enviada ao repositório
   (código, SQL, planilha ou documentação) dispara a esteira. Isso garante
   que a AWS esteja sempre alinhada com o que está versionado no GitHub.
-- **Agendamento três vezes ao dia**, em horários fora da hora cheia (o cron do GitHub é em UTC):
-
-  | Cron (UTC) | Horário em Brasília |
-  |---|---|
-  | `47 3 * * *` | 00:47 |
-  | `23 9 * * *` | 06:23 |
-  | `41 21 * * *` | 18:41 |
-
-  Os minutos "quebrados" foram escolhidos de propósito. O GitHub atrasa as execuções agendadas quando há muita fila, principalmente na hora cheia, onde a maioria dos projetos agenda. Com o cron original (`0 3 * * *`), a execução chegou a iniciar mais de 6 horas depois do previsto. Três execuções por dia também exercitam a esteira com frequência, o que comprova que a reexecução é segura.
+- **Disparo agendado pelo Amazon EventBridge (a cada 3 horas):** uma regra do EventBridge chama a API do GitHub e aciona o workflow via `workflow_dispatch`, no minuto 33 de cada 3ª hora (cron da AWS, em UTC: `cron(33 0/3 * * ? *)`). Esse disparo aparece no GitHub como "Manually run", porque todo disparo por API é considerado manual. **O passo a passo completo está em `docs/otimizando_automacao.md`.**
 - **Execução manual** (`workflow_dispatch`, botão *Run workflow*).
 
-**Fila única (`concurrency`):** só uma execução roda por vez. Se um `push` e um agendamento coincidirem, a segunda espera a primeira terminar, porque o CTAS apaga e recria as pastas de destino na Curated e duas execuções simultâneas disputariam os mesmos arquivos.
+> ### ~~Agendamento pelo cron do GitHub (`schedule`)~~ — **REMOVIDO em 10/11/2026**
+>
+> ~~Agendamento três vezes ao dia, em horários fora da hora cheia (o cron do GitHub é em UTC):~~
+>
+> | ~~Cron (UTC)~~ | ~~Horário em Brasília~~ |
+> |---|---|
+> | ~~`47 3 * * *`~~ | ~~00:47~~ |
+> | ~~`23 9 * * *`~~ | ~~06:23~~ |
+> | ~~`41 21 * * *`~~ | ~~18:41~~ |
+>
+> **Por que foi removido:** o cron do GitHub Actions funciona em "melhor esforço" e atrasa muito quando há fila, mesmo com minutos "quebrados". Com o cron original (`0 3 * * *`), a execução chegou a iniciar mais de 6 horas depois do previsto. O agendamento foi então passado para o Amazon EventBridge, que é pontual.
+>
+> **Veja o novo arquivo `docs/otimizando_automacao.md`**, que explica tudo o que foi feito.
+
+**Fila única (`concurrency`):** só uma execução roda por vez. Se um `push` e um disparo do EventBridge coincidirem, a segunda espera a primeira terminar, porque o CTAS apaga e recria as pastas de destino na Curated e duas execuções simultâneas disputariam os mesmos arquivos.
 
 ### 6.2 Etapas
 
@@ -406,7 +413,7 @@ Os botões são parâmetros de campos ou tabelas soltas ligadas a uma medida, e 
 
 ### 9.4 Atualização dos dados
 
-No modo **Importar**, o Power BI guarda uma cópia dos dados. Depois que a esteira roda (por `push` ou por um dos três agendamentos diários), basta clicar em **Atualizar** para trazer a carga nova. Tabelas novas na Curated só aparecem em **Obter dados → Amazon Athena**: o botão Atualizar renova apenas as tabelas já importadas.
+No modo **Importar**, o Power BI guarda uma cópia dos dados. Depois que a esteira roda (por `push` ou por um dos disparos do EventBridge, de 3 em 3 horas), basta clicar em **Atualizar** para trazer a carga nova. ~~Os três agendamentos diários do cron do GitHub~~ **[REMOVIDO: ver seção 6.1 e `docs/otimizando_automacao.md`]**. Tabelas novas na Curated só aparecem em **Obter dados → Amazon Athena**: o botão Atualizar renova apenas as tabelas já importadas.
 
 O modo Importar foi escolhido porque o Athena cobra pelos dados lidos e os visuais respondem mais rápido: a consulta acontece uma vez por atualização, e não a cada clique no dashboard.
 
@@ -422,7 +429,7 @@ O modo Importar foi escolhido porque o Athena cobra pelos dados lidos e os visua
 - **O Power BI lê só a Curated:** a lógica dos indicadores fica no SQL versionado, e não em cálculos soltos no dashboard.
 - **Credenciais fora do repositório:** as chaves da esteira ficam nas *Secrets* do GitHub, e as do Power BI ficam apenas no DSN do computador.
 - **Dois níveis de CI antes da AWS:** a sintaxe dos scripts Python e a conformidade dos arquivos SQL são validadas sem credenciais, então um erro de código ou de SQL nunca chega a tocar a nuvem.
-- **Agendamento fora da hora cheia e fila única:** minutos quebrados no cron reduzem o atraso do agendador do GitHub, e o `concurrency` impede duas execuções simultâneas sobre as mesmas pastas do S3.
+- **Agendamento pelo EventBridge e fila única:** ~~minutos quebrados no cron do GitHub~~ **[REMOVIDO: o cron do GitHub continuava atrasando]**. O disparo agora vem do Amazon EventBridge (ver `docs/otimizando_automacao.md`), e o `concurrency` continua impedindo duas execuções simultâneas sobre as mesmas pastas do S3.
 - **Valores monetários dos indicadores de vendas com 2 casas:** `CAST(... AS DECIMAL(18,2))` no SQL, porque o `total_a_pagar` vem com mais casas decimais (o desconto gera centavos quebrados).
 - **Mudança de nome de indicador exige limpeza manual:** ao renomear um `.sql`, a tabela e a pasta antigas continuam no Glue e no S3 e precisam ser apagadas (foi o caso do ind4, de estado para cidade).
 
@@ -447,7 +454,8 @@ O modo Importar foi escolhido porque o Athena cobra pelos dados lidos e os visua
 | Scripts SQL de CTAS versionados | Concluído (8 arquivos) |
 | CI de Python (sintaxe dos scripts) | Concluído |
 | CI de SQL (`validar_sql.py`) | Concluído |
-| Esteira CI/CD com agendamento 3x ao dia | Concluído |
+| Esteira CI/CD com disparo agendado | Concluído (EventBridge a cada 3 horas; ~~cron do GitHub 3x ao dia~~ removido em 10/11/2026) |
+| Automação do disparo pelo EventBridge | Concluído (ver `docs/otimizando_automacao.md`) |
 | Conexão do Power BI com a Curated | Concluído |
 | Dashboard no Power BI | Concluído |
-| Documentação técnica | Concluído, atualizada em 08/11/2026 |
+| Documentação técnica | Concluído, atualizada em 10/11/2026 |  

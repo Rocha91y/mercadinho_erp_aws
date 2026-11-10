@@ -6,16 +6,19 @@ on:
 
   workflow_dispatch:    # Botão "Run workflow" para rodar na mão
 
+  #========================REMOVIDO! APLIQUEI O DISPARO PELO AWS EVENTBRIDGE (VERIFICAR EM DOCS/otimizando_automacao.md)========================#
   # Agendamento 3x ao dia. O horário do cron é em UTC (Brasília = UTC-3).
   # Minutos "quebrados" (47, 23, 41) de propósito: o GitHub atrasa muito as execuções (Meu antigo estava demorando 6 horas)
   # marcadas na hora cheia (:00), porque todo mundo agenda ali.
-  schedule:
-   - cron: '33 */3 * * *' # Roda de 3 em 3 horas, no minuto 33 (00:33, 03:33, 06:33, 09:33, 12:33, 15:33, 18:33, 21:33)
+  # schedule:
+  # - cron: '33 */3 * * *' # Roda de 3 em 3 horas, no minuto 33 (00:33, 03:33, 06:33, 09:33, 12:33, 15:33, 18:33, 21:33)
 
-# Só uma execução por vez: evita que um push e um agendamento rodem juntos
-# e briguem pelas mesmas pastas do S3 (o CTAS apaga e recria a pasta de destino).
-concurrency:
-  group: pipeline-lakehouse-mercadinho
+
+
+  #========================REMOVIDO! APLIQUEI O DISPARO PELO AWS EVENTBRIDGE (VERIFICAR EM DOCS/OTIMIZACAO_AUTOMACAO.md)========================#
+
+concurrency:                              # Só uma execução por vez: evita que um push e um agendamento rodem juntos
+  group: pipeline-lakehouse-mercadinho    # e briguem pelas mesmas pastas do S3 (o CTAS apaga e recria a pasta de destino).
   cancel-in-progress: false
 
 jobs:
